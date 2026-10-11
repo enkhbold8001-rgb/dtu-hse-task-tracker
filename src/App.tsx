@@ -11,7 +11,7 @@ import { useApp } from './hooks/useApp';
 export default function App() {
   const {
     violations, tasks,
-    isLoading, error,
+    isLoading, error, saveError,
     addViolation, updateViolation,
     addAction, updateAction, updateActionStatus, updateActionEvidence, addEvidence,
     closeViolation,
@@ -49,6 +49,11 @@ export default function App() {
   return (
     <BrowserRouter>
       <Layout>
+        {saveError && (
+          <div role="alert" className="mb-4 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">
+            ⚠ {saveError}. Сүүлийн өөрчлөлт хадгалагдаагүй байна — хуудсыг дахин ачаалбал алга болно.
+          </div>
+        )}
         <Routes>
           <Route path="/" element={<Dashboard violations={violations} tasks={tasks} />} />
           <Route

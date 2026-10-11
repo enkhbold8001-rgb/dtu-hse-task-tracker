@@ -2,6 +2,9 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { violations as mockViolations, tasks as mockTasks } from '../data/mockData';
 import type { Violation, Task, CorrectiveAction, Evidence } from '../types';
 import { store } from '../storage';
+import {
+  applyClose, deriveViolationStatus, sanitizeViolationUpdate,
+} from '../utils/violationRules';
 
 // Зөрчлийн дугаар React state-аас тооцоолно.
 // SharePoint-д серверийн тал баталгаажуулах шаардлагатай.
@@ -16,6 +19,20 @@ function buildViolationCode(existing: Violation[]): string {
   return `ЗР-${year}-${String(max + 1).padStart(3, '0')}`;
 }
 
+// Хаагдсан зөрчлийг өөрчлөхгүй — аудитын бүртгэл хэвээр үлдэнэ.
+function updateOpenViolation(
+  list: Violation[],
+  violationId: string,
+  fn: (v: Violation) => Violation,
+): Violation[] {
+  return list.map(v => (v.id !== violationId || v.status === 'closed') ? v : fn(v));
+}
+
+// Арга хэмжээ өөрчлөгдсөний дараа зөрчлийн төлөвийг дахин тооцоолно.
+function withDerivedStatus(v: Violation): Violation {
+  return { ...v, status: deriveViolationStatus(v) };
+}
+
 export interface AppState {
   violations: Violation[];
   tasks: Task[];
@@ -28,6 +45,11 @@ export function useApp() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Амжилттай ачаалсны дараа л хадгална. Уншилт амжилтгүй бол
+  // хадгалсан (магадгүй эвдэрсэн) өгөгдлийг хоосон төлөвөөр дарж бичихгүй.
+  const [canPersist, setCanPersist] = useState(false);
+  const [violationSaveError, setViolationSaveError] = useState<string | null>(null);
+  const [taskSaveError, setTaskSaveError] = useState<string | null>(null);
 
   // Хамгийн сүүлийн хадгалалтыг хянах ref-үүд.
   // Хадгалалт давхцах үед хуучин дуудлага үр дүнгүй болно.
@@ -42,18 +64,25 @@ export function useApp() {
     const init = async () => {
       try {
         const initialized = await store.isInitialized();
+        let [v, t] = await Promise.all([store.getViolations(), store.getTasks()]);
         if (!initialized) {
-          await store.saveViolations(mockViolations);
-          await store.saveTasks(mockTasks);
+          // Жишээ өгөгдлийг зөвхөн хадгалалт бүрэн хоосон үед оруулна.
+          // Туг алга ч бодит өгөгдөл байвал түүнийг хэвээр үлдээнэ.
+          if (v.length === 0 && t.length === 0) {
+            await store.saveViolations(mockViolations);
+            await store.saveTasks(mockTasks);
+            v = mockViolations;
+            t = mockTasks;
+          }
           await store.markInitialized();
         }
-        const [v, t] = await Promise.all([store.getViolations(), store.getTasks()]);
         if (!cancelled) {
           setViolations(v);
           setTasks(t);
+          setCanPersist(true);
           setIsLoading(false);
         }
-      } catch (e) {
+      } catch {
         if (!cancelled) {
           setError('Өгөгдөл уншихад алдаа гарлаа');
           setIsLoading(false);
@@ -68,27 +97,38 @@ export function useApp() {
   // --- Зөрчлийг хадгалах (latest-wins) ---
 
   useEffect(() => {
-    if (isLoading) return;
+    if (!canPersist) return;
     const seq = ++saveVRef.current;
-    store.saveViolations(violations).catch(() => {
-      // Зөвхөн хамгийн сүүлийн дуудлагын алдааг харуул
-      if (saveVRef.current === seq) {
-        setError('Зөрчлийн мэдээлэл хадгалахад алдаа гарлаа');
-      }
-    });
-  }, [violations, isLoading]);
+    // Promise.resolve().then — store синхрон алдаа шидсэн ч баригдана
+    Promise.resolve()
+      .then(() => store.saveViolations(violations))
+      .then(
+        // Зөвхөн хамгийн сүүлийн дуудлагын үр дүнг харуул
+        () => { if (saveVRef.current === seq) setViolationSaveError(null); },
+        () => {
+          if (saveVRef.current === seq) {
+            setViolationSaveError('Зөрчлийн мэдээлэл хадгалагдсангүй');
+          }
+        },
+      );
+  }, [violations, canPersist]);
 
   // --- Даалгаврыг хадгалах (latest-wins) ---
 
   useEffect(() => {
-    if (isLoading) return;
+    if (!canPersist) return;
     const seq = ++saveTRef.current;
-    store.saveTasks(tasks).catch(() => {
-      if (saveTRef.current === seq) {
-        setError('Даалгаврын мэдээлэл хадгалахад алдаа гарлаа');
-      }
-    });
-  }, [tasks, isLoading]);
+    Promise.resolve()
+      .then(() => store.saveTasks(tasks))
+      .then(
+        () => { if (saveTRef.current === seq) setTaskSaveError(null); },
+        () => {
+          if (saveTRef.current === seq) {
+            setTaskSaveError('Даалгаврын мэдээлэл хадгалагдсангүй');
+          }
+        },
+      );
+  }, [tasks, canPersist]);
 
   // --- Violations ---
 
@@ -106,7 +146,8 @@ export function useApp() {
   }, []);
 
   const updateViolation = useCallback((violationId: string, data: Partial<Violation>) => {
-    setViolations(prev => prev.map(v => v.id === violationId ? { ...v, ...data } : v));
+    const clean = sanitizeViolationUpdate(data);
+    setViolations(prev => updateOpenViolation(prev, violationId, v => ({ ...v, ...clean })));
   }, []);
 
   // --- Actions ---
@@ -123,11 +164,9 @@ export function useApp() {
       progress: 0,
       evidence: [],
     };
-    setViolations(prev => prev.map(v => {
-      if (v.id !== violationId) return v;
-      const actions = [...v.actions, newAction];
-      return { ...v, actions, status: v.status === 'open' ? 'in_progress' : v.status };
-    }));
+    setViolations(prev => updateOpenViolation(prev, violationId, v =>
+      withDerivedStatus({ ...v, actions: [...v.actions, newAction] })
+    ));
   }, []);
 
   const updateAction = useCallback((
@@ -135,10 +174,9 @@ export function useApp() {
     actionId: string,
     data: Partial<CorrectiveAction>
   ) => {
-    setViolations(prev => prev.map(v => {
-      if (v.id !== violationId) return v;
-      return { ...v, actions: v.actions.map(a => a.id === actionId ? { ...a, ...data } : a) };
-    }));
+    setViolations(prev => updateOpenViolation(prev, violationId, v =>
+      withDerivedStatus({ ...v, actions: v.actions.map(a => a.id === actionId ? { ...a, ...data } : a) })
+    ));
   }, []);
 
   const updateActionStatus = useCallback((
@@ -146,15 +184,9 @@ export function useApp() {
     actionId: string,
     updates: Partial<CorrectiveAction>
   ) => {
-    setViolations(prev => prev.map(v => {
-      if (v.id !== violationId) return v;
-      const updatedActions = v.actions.map(a => a.id === actionId ? { ...a, ...updates } : a);
-      const allCompleted = updatedActions.every(a => a.status === 'completed');
-      const newStatus = allCompleted
-        ? 'pending_verification'
-        : v.status === 'open' ? 'in_progress' : v.status;
-      return { ...v, actions: updatedActions, status: newStatus as Violation['status'] };
-    }));
+    setViolations(prev => updateOpenViolation(prev, violationId, v =>
+      withDerivedStatus({ ...v, actions: v.actions.map(a => a.id === actionId ? { ...a, ...updates } : a) })
+    ));
   }, []);
 
   const updateActionEvidence = useCallback((
@@ -163,8 +195,7 @@ export function useApp() {
     evidence: Evidence,
     approved: boolean
   ) => {
-    setViolations(prev => prev.map(v => {
-      if (v.id !== violationId) return v;
+    setViolations(prev => updateOpenViolation(prev, violationId, v => {
       return {
         ...v,
         actions: v.actions.map(a => {
@@ -172,7 +203,8 @@ export function useApp() {
           return {
             ...a,
             evidence: a.evidence.map(e => {
-              if (e.id !== evidence.id) return e;
+              // Зөвхөн шийдвэр хүлээж буй баримтыг батлах/татгалзана
+              if (e.id !== evidence.id || e.approved !== undefined) return e;
               return {
                 ...e,
                 approved,
@@ -197,28 +229,21 @@ export function useApp() {
       id: crypto.randomUUID(),
       actionId,
     };
-    setViolations(prev => prev.map(v => {
-      if (v.id !== violationId) return v;
-      return {
-        ...v,
-        actions: v.actions.map(a => {
-          if (a.id !== actionId) return a;
-          return { ...a, evidence: [...a.evidence, newEvidence] };
-        }),
-      };
-    }));
+    setViolations(prev => updateOpenViolation(prev, violationId, v => ({
+      ...v,
+      actions: v.actions.map(a => {
+        if (a.id !== actionId) return a;
+        return { ...a, evidence: [...a.evidence, newEvidence] };
+      }),
+    })));
   }, []);
 
   const closeViolation = useCallback((violationId: string) => {
-    setViolations(prev => prev.map(v => {
-      if (v.id !== violationId) return v;
-      return {
-        ...v,
-        status: 'closed',
-        closedDate: new Date().toISOString().split('T')[0],
-        closedBy: 'Б. Дорж',
-      };
-    }));
+    // Хаалтын шалгуурыг бизнес логикт шалгана — UI-аас үл хамааран.
+    const today = new Date().toISOString().split('T')[0];
+    setViolations(prev => prev.map(v =>
+      v.id === violationId ? applyClose(v, 'Б. Дорж', today) : v
+    ));
   }, []);
 
   // --- Tasks ---
@@ -242,6 +267,7 @@ export function useApp() {
     tasks,
     isLoading,
     error,
+    saveError: violationSaveError ?? taskSaveError,
     addViolation,
     updateViolation,
     addAction,

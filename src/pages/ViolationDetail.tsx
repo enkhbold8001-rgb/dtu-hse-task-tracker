@@ -13,6 +13,7 @@ import {
 } from '../utils/helpers';
 import Modal from '../components/Modal';
 import ActionForm from '../components/ActionForm';
+import { getCloseBlockReason } from '../utils/violationRules';
 
 interface ViolationDetailProps {
   violations: Violation[];
@@ -27,9 +28,10 @@ interface ViolationDetailProps {
 const evidenceTypeIcon = { document: FileText, photo: Camera, report: BarChart2 };
 const evidenceTypeLabel = { document: 'Баримт бичиг', photo: 'Зураг', report: 'Тайлан' };
 
-function EvidenceCard({ evidence, onApprove }: {
+function EvidenceCard({ evidence, onApprove, readOnly }: {
   evidence: Evidence;
   onApprove: (ev: Evidence, approved: boolean) => void;
+  readOnly: boolean;
 }) {
   const Icon = evidenceTypeIcon[evidence.type];
   return (
@@ -69,7 +71,7 @@ function EvidenceCard({ evidence, onApprove }: {
               )}
             </div>
           </div>
-          {evidence.approved === undefined && (
+          {evidence.approved === undefined && !readOnly && (
             <div className="flex gap-2 mt-2">
               <button
                 onClick={() => onApprove(evidence, true)}
@@ -156,8 +158,9 @@ function AddEvidenceForm({ onSubmit, onCancel }: {
   );
 }
 
-function ActionCard({ action, onApproveEvidence, onUpdateStatus, onUpdateAction, onAddEvidence }: {
+function ActionCard({ action, violationClosed, onApproveEvidence, onUpdateStatus, onUpdateAction, onAddEvidence }: {
   action: CorrectiveAction;
+  violationClosed: boolean;
   onApproveEvidence: (ev: Evidence, approved: boolean) => void;
   onUpdateStatus: (updates: Partial<CorrectiveAction>) => void;
   onUpdateAction: (data: Partial<CorrectiveAction>) => void;
@@ -266,7 +269,7 @@ function ActionCard({ action, onApproveEvidence, onUpdateStatus, onUpdateAction,
               <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
                 Нотлох баримтууд ({action.evidence.length})
               </div>
-              {action.status !== 'completed' && !addingEvidence && (
+              {!violationClosed && !addingEvidence && (
                 <button
                   onClick={() => setAddingEvidence(true)}
                   className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 transition-colors"
@@ -292,6 +295,7 @@ function ActionCard({ action, onApproveEvidence, onUpdateStatus, onUpdateAction,
                     key={ev.id}
                     evidence={ev}
                     onApprove={onApproveEvidence}
+                    readOnly={violationClosed}
                   />
                 ))}
               </div>
@@ -321,12 +325,9 @@ export default function ViolationDetail({
     );
   }
 
-  const allActionsCompleted = violation.actions.length > 0 &&
-    violation.actions.every(a => a.status === 'completed');
-  const allEvidenceApproved = violation.actions.every(a =>
-    a.evidence.every(e => e.approved === true)
-  );
-  const canClose = allActionsCompleted && allEvidenceApproved && violation.status !== 'closed';
+  // Хаалтын шалгуур — useApp-ийн closeViolation-тэй ижил дүрэм
+  const closeBlockReason = getCloseBlockReason(violation);
+  const canClose = closeBlockReason === null;
 
   return (
     <div className="max-w-3xl space-y-5">
@@ -370,9 +371,7 @@ export default function ViolationDetail({
         {!canClose && violation.status !== 'closed' && (
           <div className="mt-3 text-xs text-yellow-700 bg-yellow-50 rounded-lg p-2.5 flex items-center gap-2">
             <AlertCircle className="w-4 h-4 flex-shrink-0" />
-            {!allActionsCompleted
-              ? 'Хаахын тулд бүх арга хэмжээ биелсэн байх шаардлагатай.'
-              : 'Хаахын тулд бүх нотлох баримт баталгаажсан байх шаардлагатай.'}
+            {closeBlockReason}
           </div>
         )}
 
@@ -448,6 +447,7 @@ export default function ViolationDetail({
               <ActionCard
                 key={action.id}
                 action={action}
+                violationClosed={violation.status === 'closed'}
                 onApproveEvidence={(ev, approved) => onApproveEvidence(violation.id, action.id, ev, approved)}
                 onUpdateStatus={(updates) => onUpdateActionStatus(violation.id, action.id, updates)}
                 onUpdateAction={(data) => onUpdateAction(violation.id, action.id, data)}
