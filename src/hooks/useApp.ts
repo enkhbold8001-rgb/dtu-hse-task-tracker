@@ -1,38 +1,108 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { violations as mockViolations, tasks as mockTasks } from '../data/mockData';
 import type { Violation, Task, CorrectiveAction, Evidence } from '../types';
 import { store } from '../storage';
 
-function initStore(): { violations: Violation[]; tasks: Task[] } {
-  if (!store.isInitialized()) {
-    store.saveViolations(mockViolations);
-    store.saveTasks(mockTasks);
-    store.markInitialized();
-  }
-  return {
-    violations: store.getViolations(),
-    tasks: store.getTasks(),
-  };
+// Зөрчлийн дугаар React state-аас тооцоолно.
+// SharePoint-д серверийн тал баталгаажуулах шаардлагатай.
+function buildViolationCode(existing: Violation[]): string {
+  const year = new Date().getFullYear();
+  const codes = existing
+    .map(v => v.code)
+    .filter(c => c.startsWith(`ЗР-${year}-`))
+    .map(c => parseInt(c.split('-')[2] ?? '0', 10))
+    .filter(n => !isNaN(n));
+  const max = codes.length > 0 ? Math.max(...codes) : 0;
+  return `ЗР-${year}-${String(max + 1).padStart(3, '0')}`;
+}
+
+export interface AppState {
+  violations: Violation[];
+  tasks: Task[];
+  isLoading: boolean;
+  error: string | null;
 }
 
 export function useApp() {
-  const [violations, setViolations] = useState<Violation[]>(() => initStore().violations);
-  const [tasks, setTasks] = useState<Task[]>(() => store.getTasks());
+  const [violations, setViolations] = useState<Violation[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => { store.saveViolations(violations); }, [violations]);
-  useEffect(() => { store.saveTasks(tasks); }, [tasks]);
+  // Хамгийн сүүлийн хадгалалтыг хянах ref-үүд.
+  // Хадгалалт давхцах үед хуучин дуудлага үр дүнгүй болно.
+  const saveVRef = useRef(0);
+  const saveTRef = useRef(0);
+
+  // --- Анхны ачаалал ---
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const init = async () => {
+      try {
+        const initialized = await store.isInitialized();
+        if (!initialized) {
+          await store.saveViolations(mockViolations);
+          await store.saveTasks(mockTasks);
+          await store.markInitialized();
+        }
+        const [v, t] = await Promise.all([store.getViolations(), store.getTasks()]);
+        if (!cancelled) {
+          setViolations(v);
+          setTasks(t);
+          setIsLoading(false);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setError('Өгөгдөл уншихад алдаа гарлаа');
+          setIsLoading(false);
+        }
+      }
+    };
+
+    init();
+    return () => { cancelled = true; };
+  }, []);
+
+  // --- Зөрчлийг хадгалах (latest-wins) ---
+
+  useEffect(() => {
+    if (isLoading) return;
+    const seq = ++saveVRef.current;
+    store.saveViolations(violations).catch(() => {
+      // Зөвхөн хамгийн сүүлийн дуудлагын алдааг харуул
+      if (saveVRef.current === seq) {
+        setError('Зөрчлийн мэдээлэл хадгалахад алдаа гарлаа');
+      }
+    });
+  }, [violations, isLoading]);
+
+  // --- Даалгаврыг хадгалах (latest-wins) ---
+
+  useEffect(() => {
+    if (isLoading) return;
+    const seq = ++saveTRef.current;
+    store.saveTasks(tasks).catch(() => {
+      if (saveTRef.current === seq) {
+        setError('Даалгаврын мэдээлэл хадгалахад алдаа гарлаа');
+      }
+    });
+  }, [tasks, isLoading]);
 
   // --- Violations ---
 
   const addViolation = useCallback((data: Omit<Violation, 'id' | 'code' | 'actions' | 'status'>) => {
-    const newViolation: Violation = {
-      ...data,
-      id: crypto.randomUUID(),
-      code: store.generateViolationCode(),
-      status: 'open',
-      actions: [],
-    };
-    setViolations(prev => [newViolation, ...prev]);
+    setViolations(prev => {
+      const newViolation: Violation = {
+        ...data,
+        id: crypto.randomUUID(),
+        code: buildViolationCode(prev),
+        status: 'open',
+        actions: [],
+      };
+      return [newViolation, ...prev];
+    });
   }, []);
 
   const updateViolation = useCallback((violationId: string, data: Partial<Violation>) => {
@@ -41,7 +111,10 @@ export function useApp() {
 
   // --- Actions ---
 
-  const addAction = useCallback((violationId: string, data: Omit<CorrectiveAction, 'id' | 'violationId' | 'evidence' | 'status' | 'progress'>) => {
+  const addAction = useCallback((
+    violationId: string,
+    data: Omit<CorrectiveAction, 'id' | 'violationId' | 'evidence' | 'status' | 'progress'>
+  ) => {
     const newAction: CorrectiveAction = {
       ...data,
       id: crypto.randomUUID(),
@@ -57,7 +130,11 @@ export function useApp() {
     }));
   }, []);
 
-  const updateAction = useCallback((violationId: string, actionId: string, data: Partial<CorrectiveAction>) => {
+  const updateAction = useCallback((
+    violationId: string,
+    actionId: string,
+    data: Partial<CorrectiveAction>
+  ) => {
     setViolations(prev => prev.map(v => {
       if (v.id !== violationId) return v;
       return { ...v, actions: v.actions.map(a => a.id === actionId ? { ...a, ...data } : a) };
@@ -110,7 +187,11 @@ export function useApp() {
     }));
   }, []);
 
-  const addEvidence = useCallback((violationId: string, actionId: string, data: Omit<Evidence, 'id' | 'actionId'>) => {
+  const addEvidence = useCallback((
+    violationId: string,
+    actionId: string,
+    data: Omit<Evidence, 'id' | 'actionId'>
+  ) => {
     const newEvidence: Evidence = {
       ...data,
       id: crypto.randomUUID(),
@@ -159,6 +240,8 @@ export function useApp() {
   return {
     violations,
     tasks,
+    isLoading,
+    error,
     addViolation,
     updateViolation,
     addAction,
