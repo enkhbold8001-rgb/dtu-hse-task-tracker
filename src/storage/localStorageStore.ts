@@ -1,6 +1,8 @@
 // localStorage implementation — НЕ production-ready.
 // Production орчинд IStorageAsync-ийг SharePointStore-ээр солино.
-// Бүх методуудыг Promise.resolve()-д ороосон — SharePointStore-тэй интерфейс ижил.
+// Бүх методууд Promise буцаана — SharePointStore-тэй интерфейс ижил.
+// Алдааг (JSON эвдэрсэн, квот дүүрсэн) Promise.reject-ээр дамжуулна:
+// эвдэрсэн өгөгдлийг хоосон массив гэж үзэж дарж бичихгүй.
 import type { Violation, Task } from '../types';
 import type { IStorageAsync } from './types';
 
@@ -10,41 +12,55 @@ const KEYS = {
   initialized: 'dtu_hemab_initialized_v1',
 } as const;
 
+function readArray<T>(key: string): Promise<T[]> {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return Promise.resolve([]);
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return Promise.reject(new Error(`${key}: хадгалсан өгөгдөл массив биш байна`));
+    }
+    return Promise.resolve(parsed as T[]);
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+function write(key: string, value: string): Promise<void> {
+  try {
+    localStorage.setItem(key, value);
+    return Promise.resolve();
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
 export class LocalStorageStore implements IStorageAsync {
   getViolations(): Promise<Violation[]> {
-    try {
-      const raw = localStorage.getItem(KEYS.violations);
-      return Promise.resolve(raw ? (JSON.parse(raw) as Violation[]) : []);
-    } catch {
-      return Promise.resolve([]);
-    }
+    return readArray<Violation>(KEYS.violations);
   }
 
   saveViolations(violations: Violation[]): Promise<void> {
-    localStorage.setItem(KEYS.violations, JSON.stringify(violations));
-    return Promise.resolve();
+    return write(KEYS.violations, JSON.stringify(violations));
   }
 
   getTasks(): Promise<Task[]> {
-    try {
-      const raw = localStorage.getItem(KEYS.tasks);
-      return Promise.resolve(raw ? (JSON.parse(raw) as Task[]) : []);
-    } catch {
-      return Promise.resolve([]);
-    }
+    return readArray<Task>(KEYS.tasks);
   }
 
   saveTasks(tasks: Task[]): Promise<void> {
-    localStorage.setItem(KEYS.tasks, JSON.stringify(tasks));
-    return Promise.resolve();
+    return write(KEYS.tasks, JSON.stringify(tasks));
   }
 
   isInitialized(): Promise<boolean> {
-    return Promise.resolve(localStorage.getItem(KEYS.initialized) === 'true');
+    try {
+      return Promise.resolve(localStorage.getItem(KEYS.initialized) === 'true');
+    } catch (e) {
+      return Promise.reject(e);
+    }
   }
 
   markInitialized(): Promise<void> {
-    localStorage.setItem(KEYS.initialized, 'true');
-    return Promise.resolve();
+    return write(KEYS.initialized, 'true');
   }
 }
