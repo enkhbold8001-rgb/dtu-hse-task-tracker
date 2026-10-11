@@ -1,19 +1,25 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Search, Filter, CheckSquare, Calendar, Tag } from 'lucide-react';
-import type { Task, TaskStatus, Priority } from '../types';
+import { Search, Filter, CheckSquare, Calendar, Tag, Plus, Pencil } from 'lucide-react';
+import type { Task, TaskStatus, Priority, Violation } from '../types';
 import { taskStatusLabels, taskStatusColors, priorityLabels, priorityColors, formatDate, isOverdue } from '../utils/helpers';
+import Modal from '../components/Modal';
+import TaskForm from '../components/TaskForm';
 
 interface TaskListProps {
   tasks: Task[];
+  violations: Violation[];
   onUpdateTask: (taskId: string, updates: Partial<Task>) => void;
+  onAddTask: (data: Omit<Task, 'id' | 'status' | 'createdDate'>) => void;
 }
 
-export default function TaskList({ tasks, onUpdateTask }: TaskListProps) {
+export default function TaskList({ tasks, violations, onUpdateTask, onAddTask }: TaskListProps) {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<TaskStatus | 'all'>('all');
   const [priorityFilter, setPriorityFilter] = useState<Priority | 'all'>('all');
   const [showFilters, setShowFilters] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
 
   const filtered = tasks.filter(t => {
     const effectiveStatus: TaskStatus = (t.status !== 'completed' && isOverdue(t.dueDate)) ? 'overdue' : t.status;
@@ -26,7 +32,6 @@ export default function TaskList({ tasks, onUpdateTask }: TaskListProps) {
 
   return (
     <div className="space-y-4">
-      {/* Search and filters */}
       <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
         <div className="flex gap-2">
           <div className="relative flex-1">
@@ -44,7 +49,14 @@ export default function TaskList({ tasks, onUpdateTask }: TaskListProps) {
             className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm font-medium transition-colors ${showFilters ? 'bg-blue-50 border-blue-200 text-blue-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
           >
             <Filter className="w-4 h-4" />
-            Шүүлтүүр
+            <span className="hidden sm:inline">Шүүлтүүр</span>
+          </button>
+          <button
+            onClick={() => setShowAdd(true)}
+            className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            <span className="hidden sm:inline">Шинэ даалгавар</span>
           </button>
         </div>
 
@@ -102,11 +114,11 @@ export default function TaskList({ tasks, onUpdateTask }: TaskListProps) {
             return (
               <div
                 key={t.id}
-                className={`bg-white rounded-xl border overflow-hidden ${overdue ? 'border-red-200' : 'border-gray-200'}`}
+                className={`relative bg-white rounded-xl border overflow-hidden ${overdue ? 'border-red-200' : 'border-gray-200'}`}
               >
                 <div className="p-4">
                   <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1 min-w-0">
+                    <div className="flex-1 min-w-0 pr-6">
                       <div className="flex items-center gap-2 flex-wrap mb-1.5">
                         <span className={`text-xs px-2 py-0.5 rounded-full ${taskStatusColors[effectiveStatus]}`}>
                           {taskStatusLabels[effectiveStatus]}
@@ -170,10 +182,44 @@ export default function TaskList({ tasks, onUpdateTask }: TaskListProps) {
                     </div>
                   </div>
                 </div>
+
+                {t.status !== 'completed' && (
+                  <button
+                    onClick={() => setEditingTask(t)}
+                    className="absolute top-3 right-3 p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+                    title="Засах"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             );
           })}
         </div>
+      )}
+
+      {showAdd && (
+        <Modal title="Шинэ даалгавар бүртгэх" onClose={() => setShowAdd(false)}>
+          <TaskForm
+            violations={violations}
+            onSubmit={data => { onAddTask(data); setShowAdd(false); }}
+            onCancel={() => setShowAdd(false)}
+          />
+        </Modal>
+      )}
+
+      {editingTask && (
+        <Modal title="Даалгавар засах" onClose={() => setEditingTask(null)}>
+          <TaskForm
+            initial={editingTask}
+            violations={violations}
+            onSubmit={data => {
+              onUpdateTask(editingTask.id, data);
+              setEditingTask(null);
+            }}
+            onCancel={() => setEditingTask(null)}
+          />
+        </Modal>
       )}
     </div>
   );

@@ -2,21 +2,26 @@ import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
   ArrowLeft, CheckCircle, XCircle, Clock, FileText,
-  Camera, BarChart2, ChevronDown, ChevronUp, Lock, AlertCircle
+  Camera, BarChart2, ChevronDown, ChevronUp, Lock, AlertCircle, Plus, Pencil
 } from 'lucide-react';
-import type { Violation, CorrectiveAction, Evidence } from '../types';
+import type { Violation, CorrectiveAction, Evidence, EvidenceType } from '../types';
 import {
   violationStatusLabels, violationStatusColors,
   actionStatusLabels, actionStatusColors,
   severityLabels, severityColors,
   formatDate, isOverdue
 } from '../utils/helpers';
+import Modal from '../components/Modal';
+import ActionForm from '../components/ActionForm';
 
 interface ViolationDetailProps {
   violations: Violation[];
   onApproveEvidence: (violationId: string, actionId: string, evidence: Evidence, approved: boolean) => void;
   onCloseViolation: (violationId: string) => void;
   onUpdateActionStatus: (violationId: string, actionId: string, updates: Partial<CorrectiveAction>) => void;
+  onAddAction: (violationId: string, data: Omit<CorrectiveAction, 'id' | 'violationId' | 'evidence' | 'status' | 'progress'>) => void;
+  onUpdateAction: (violationId: string, actionId: string, data: Partial<CorrectiveAction>) => void;
+  onAddEvidence: (violationId: string, actionId: string, data: Omit<Evidence, 'id' | 'actionId'>) => void;
 }
 
 const evidenceTypeIcon = { document: FileText, photo: Camera, report: BarChart2 };
@@ -94,12 +99,73 @@ function EvidenceCard({ evidence, onApprove }: {
   );
 }
 
-function ActionCard({ action, onApproveEvidence, onUpdateStatus }: {
+function AddEvidenceForm({ onSubmit, onCancel }: {
+  onSubmit: (data: Omit<Evidence, 'id' | 'actionId'>) => void;
+  onCancel: () => void;
+}) {
+  const [type, setType] = useState<EvidenceType>('document');
+  const [description, setDescription] = useState('');
+  const [fileName, setFileName] = useState('');
+  const [error, setError] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!description.trim() || !fileName.trim()) { setError('Тайлбар болон файлын нэр оруулна уу'); return; }
+    onSubmit({
+      type,
+      description,
+      fileName,
+      uploadedBy: 'Б. Дорж',
+      uploadedDate: new Date().toISOString().split('T')[0],
+    });
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-3 bg-blue-50 rounded-lg p-3 border border-blue-100">
+      <div className="text-xs font-semibold text-blue-700">Нотлох баримт нэмэх</div>
+      <div className="text-xs text-orange-600 bg-orange-50 rounded px-2 py-1.5 border border-orange-100">
+        ⚠ Файл бодитоор байршуулахгүй. Симуляцийн горим.
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-600 mb-1">Төрөл</label>
+        <select value={type} onChange={e => setType(e.target.value as EvidenceType)}
+          className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="document">Баримт бичиг</option>
+          <option value="photo">Зураг</option>
+          <option value="report">Тайлан</option>
+        </select>
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-600 mb-1">Тайлбар *</label>
+        <input type="text" value={description} onChange={e => { setDescription(e.target.value); setError(''); }}
+          placeholder="Баримтын тайлбар..."
+          className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-600 mb-1">Файлын нэр *</label>
+        <input type="text" value={fileName} onChange={e => { setFileName(e.target.value); setError(''); }}
+          placeholder="жишээ: report_2024.pdf"
+          className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+      </div>
+      {error && <p className="text-xs text-red-500">{error}</p>}
+      <div className="flex gap-2">
+        <button type="submit" className="flex-1 bg-blue-600 text-white text-xs px-3 py-1.5 rounded-lg hover:bg-blue-700 transition-colors">Нэмэх</button>
+        <button type="button" onClick={onCancel} className="flex-1 bg-white text-gray-600 text-xs px-3 py-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors">Цуцлах</button>
+      </div>
+    </form>
+  );
+}
+
+function ActionCard({ action, onApproveEvidence, onUpdateStatus, onUpdateAction, onAddEvidence }: {
   action: CorrectiveAction;
   onApproveEvidence: (ev: Evidence, approved: boolean) => void;
   onUpdateStatus: (updates: Partial<CorrectiveAction>) => void;
+  onUpdateAction: (data: Partial<CorrectiveAction>) => void;
+  onAddEvidence: (data: Omit<Evidence, 'id' | 'actionId'>) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [editingAction, setEditingAction] = useState(false);
+  const [addingEvidence, setAddingEvidence] = useState(false);
   const overdue = isOverdue(action.dueDate, action.status);
 
   return (
@@ -141,6 +207,15 @@ function ActionCard({ action, onApproveEvidence, onUpdateStatus }: {
           {action.evidence.length > 0 && (
             <span className="text-xs text-gray-400">{action.evidence.length} баримт</span>
           )}
+          {action.status !== 'completed' && (
+            <button
+              onClick={e => { e.stopPropagation(); setEditingAction(true); }}
+              className="p-1 rounded hover:bg-gray-200 text-gray-400 hover:text-gray-600 transition-colors"
+              title="Засах"
+            >
+              <Pencil className="w-3.5 h-3.5" />
+            </button>
+          )}
           {expanded ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
         </div>
       </div>
@@ -153,7 +228,6 @@ function ActionCard({ action, onApproveEvidence, onUpdateStatus }: {
             </div>
           )}
 
-          {/* Status update buttons */}
           {action.status !== 'completed' && (
             <div className="flex gap-2 flex-wrap">
               {action.status === 'pending' && (
@@ -179,12 +253,35 @@ function ActionCard({ action, onApproveEvidence, onUpdateStatus }: {
             </div>
           )}
 
-          {/* Evidence */}
+          {editingAction && (
+            <ActionForm
+              initial={{ description: action.description, responsiblePerson: action.responsiblePerson, dueDate: action.dueDate, notes: action.notes }}
+              onSubmit={data => { onUpdateAction(data); setEditingAction(false); }}
+              onCancel={() => setEditingAction(false)}
+            />
+          )}
+
           <div>
-            <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-              Нотлох баримтууд ({action.evidence.length})
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                Нотлох баримтууд ({action.evidence.length})
+              </div>
+              {action.status !== 'completed' && !addingEvidence && (
+                <button
+                  onClick={() => setAddingEvidence(true)}
+                  className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" /> Нэмэх
+                </button>
+              )}
             </div>
-            {action.evidence.length === 0 ? (
+            {addingEvidence && (
+              <AddEvidenceForm
+                onSubmit={data => { onAddEvidence(data); setAddingEvidence(false); }}
+                onCancel={() => setAddingEvidence(false)}
+              />
+            )}
+            {action.evidence.length === 0 && !addingEvidence ? (
               <div className="text-sm text-gray-400 bg-gray-50 rounded-lg p-3 text-center">
                 Нотлох баримт байхгүй
               </div>
@@ -207,9 +304,11 @@ function ActionCard({ action, onApproveEvidence, onUpdateStatus }: {
 }
 
 export default function ViolationDetail({
-  violations, onApproveEvidence, onCloseViolation, onUpdateActionStatus
+  violations, onApproveEvidence, onCloseViolation, onUpdateActionStatus,
+  onAddAction, onUpdateAction, onAddEvidence
 }: ViolationDetailProps) {
   const { id } = useParams<{ id: string }>();
+  const [showAddAction, setShowAddAction] = useState(false);
   const violation = violations.find(v => v.id === id);
 
   if (!violation) {
@@ -231,12 +330,10 @@ export default function ViolationDetail({
 
   return (
     <div className="max-w-3xl space-y-5">
-      {/* Breadcrumb */}
       <Link to="/violations" className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
         <ArrowLeft className="w-4 h-4" /> Зөрчлийн жагсаалт руу буцах
       </Link>
 
-      {/* Header card */}
       <div className="bg-white rounded-xl border border-gray-200 p-5">
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <div>
@@ -327,11 +424,20 @@ export default function ViolationDetail({
         )}
       </div>
 
-      {/* Corrective actions */}
       <div>
-        <h2 className="font-semibold text-gray-900 mb-3">
-          Залруулах арга хэмжээ ({violation.actions.length})
-        </h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-semibold text-gray-900">
+            Залруулах арга хэмжээ ({violation.actions.length})
+          </h2>
+          {violation.status !== 'closed' && (
+            <button
+              onClick={() => setShowAddAction(true)}
+              className="flex items-center gap-1.5 text-sm px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              <Plus className="w-4 h-4" /> Нэмэх
+            </button>
+          )}
+        </div>
         {violation.actions.length === 0 ? (
           <div className="bg-white rounded-xl border border-gray-200 p-8 text-center text-gray-400 text-sm">
             Арга хэмжээ бүртгэгдээгүй байна
@@ -344,11 +450,22 @@ export default function ViolationDetail({
                 action={action}
                 onApproveEvidence={(ev, approved) => onApproveEvidence(violation.id, action.id, ev, approved)}
                 onUpdateStatus={(updates) => onUpdateActionStatus(violation.id, action.id, updates)}
+                onUpdateAction={(data) => onUpdateAction(violation.id, action.id, data)}
+                onAddEvidence={(data) => onAddEvidence(violation.id, action.id, data)}
               />
             ))}
           </div>
         )}
       </div>
+
+      {showAddAction && (
+        <Modal title="Арга хэмжээ нэмэх" onClose={() => setShowAddAction(false)}>
+          <ActionForm
+            onSubmit={data => { onAddAction(violation.id, data); setShowAddAction(false); }}
+            onCancel={() => setShowAddAction(false)}
+          />
+        </Modal>
+      )}
     </div>
   );
 }

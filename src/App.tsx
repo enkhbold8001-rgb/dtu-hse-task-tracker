@@ -9,14 +9,29 @@ import OverdueReport from './pages/OverdueReport';
 import { useApp } from './hooks/useApp';
 
 export default function App() {
-  const { violations, tasks, updateActionEvidence, closeViolation, updateActionStatus, updateTaskStatus } = useApp();
+  const {
+    violations, tasks,
+    addViolation, updateViolation,
+    addAction, updateAction, updateActionStatus, updateActionEvidence, addEvidence,
+    closeViolation,
+    addTask, updateTask,
+  } = useApp();
 
   return (
     <BrowserRouter>
       <Layout>
         <Routes>
           <Route path="/" element={<Dashboard violations={violations} tasks={tasks} />} />
-          <Route path="/violations" element={<ViolationList violations={violations} />} />
+          <Route
+            path="/violations"
+            element={
+              <ViolationList
+                violations={violations}
+                onAddViolation={addViolation}
+                onUpdateViolation={updateViolation}
+              />
+            }
+          />
           <Route
             path="/violations/:id"
             element={
@@ -25,10 +40,23 @@ export default function App() {
                 onApproveEvidence={updateActionEvidence}
                 onCloseViolation={closeViolation}
                 onUpdateActionStatus={updateActionStatus}
+                onAddAction={addAction}
+                onUpdateAction={updateAction}
+                onAddEvidence={addEvidence}
               />
             }
           />
-          <Route path="/tasks" element={<TaskList tasks={tasks} onUpdateTask={updateTaskStatus} />} />
+          <Route
+            path="/tasks"
+            element={
+              <TaskList
+                tasks={tasks}
+                violations={violations}
+                onUpdateTask={updateTask}
+                onAddTask={addTask}
+              />
+            }
+          />
           <Route path="/actions" element={<ActionPlan violations={violations} />} />
           <Route path="/overdue" element={<OverdueReport violations={violations} tasks={tasks} />} />
         </Routes>

@@ -1,11 +1,15 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Search, Filter, AlertTriangle, ChevronRight, Calendar } from 'lucide-react';
+import { Search, Filter, AlertTriangle, ChevronRight, Calendar, Plus, Pencil } from 'lucide-react';
 import type { Violation, ViolationStatus, Severity } from '../types';
 import { violationStatusLabels, violationStatusColors, severityLabels, severityColors, formatDate, isOverdue } from '../utils/helpers';
+import Modal from '../components/Modal';
+import ViolationForm from '../components/ViolationForm';
 
 interface ViolationListProps {
   violations: Violation[];
+  onAddViolation: (data: Omit<Violation, 'id' | 'code' | 'actions' | 'status'>) => void;
+  onUpdateViolation: (id: string, data: Partial<Violation>) => void;
 }
 
 const statusOptions: { value: ViolationStatus | 'all'; label: string }[] = [
@@ -16,11 +20,13 @@ const statusOptions: { value: ViolationStatus | 'all'; label: string }[] = [
   { value: 'closed', label: 'Хаагдсан' },
 ];
 
-export default function ViolationList({ violations }: ViolationListProps) {
+export default function ViolationList({ violations, onAddViolation, onUpdateViolation }: ViolationListProps) {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<ViolationStatus | 'all'>('all');
   const [severityFilter, setSeverityFilter] = useState<Severity | 'all'>('all');
   const [showFilters, setShowFilters] = useState(false);
+  const [showAdd, setShowAdd] = useState(false);
+  const [editingViolation, setEditingViolation] = useState<Violation | null>(null);
 
   const filtered = violations.filter(v => {
     const matchSearch = !search || [v.code, v.description, v.location, v.assignedTo, v.category]
@@ -32,7 +38,7 @@ export default function ViolationList({ violations }: ViolationListProps) {
 
   return (
     <div className="space-y-4">
-      {/* Search and filters */}
+      {/* Search, filters and add button */}
       <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
         <div className="flex gap-2">
           <div className="relative flex-1">
@@ -50,7 +56,14 @@ export default function ViolationList({ violations }: ViolationListProps) {
             className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm font-medium transition-colors ${showFilters ? 'bg-blue-50 border-blue-200 text-blue-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
           >
             <Filter className="w-4 h-4" />
-            Шүүлтүүр
+            <span className="hidden sm:inline">Шүүлтүүр</span>
+          </button>
+          <button
+            onClick={() => setShowAdd(true)}
+            className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            <span className="hidden sm:inline">Шинэ зөрчил</span>
           </button>
         </div>
 
@@ -115,12 +128,8 @@ export default function ViolationList({ violations }: ViolationListProps) {
             const totalActions = v.actions.length;
 
             return (
-              <Link
-                key={v.id}
-                to={`/violations/${v.id}`}
-                className="block bg-white rounded-xl border border-gray-200 hover:shadow-md hover:border-blue-200 transition-all"
-              >
-                <div className="p-4">
+              <div key={v.id} className="relative block bg-white rounded-xl border border-gray-200 hover:shadow-md hover:border-blue-200 transition-all">
+                <Link to={`/violations/${v.id}`} className="block p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap mb-2">
@@ -141,15 +150,10 @@ export default function ViolationList({ violations }: ViolationListProps) {
                       </div>
                       <p className="text-sm text-gray-800 line-clamp-2 mb-2">{v.description}</p>
                       <div className="flex items-center gap-4 text-xs text-gray-500 flex-wrap">
-                        <span className="flex items-center gap-1">
-                          <span>📍</span>{v.location}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <span>👤</span>{v.assignedTo}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <Calendar className="w-3 h-3" />
-                          <span className={overdue ? 'text-red-600 font-medium' : ''}>{formatDate(v.dueDate)}</span>
+                        <span>📍 {v.location}</span>
+                        <span>👤 {v.assignedTo}</span>
+                        <span className={`flex items-center gap-1 ${overdue ? 'text-red-600 font-medium' : ''}`}>
+                          <Calendar className="w-3 h-3" />{formatDate(v.dueDate)}
                         </span>
                         <span>{v.category}</span>
                       </div>
@@ -171,11 +175,39 @@ export default function ViolationList({ violations }: ViolationListProps) {
                       </div>
                     </div>
                   )}
-                </div>
-              </Link>
+                </Link>
+                {v.status !== 'closed' && (
+                  <button
+                    onClick={e => { e.preventDefault(); setEditingViolation(v); }}
+                    className="absolute top-3 right-8 p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+                    title="Засах"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
             );
           })}
         </div>
+      )}
+
+      {showAdd && (
+        <Modal title="Шинэ зөрчил бүртгэх" onClose={() => setShowAdd(false)}>
+          <ViolationForm
+            onSubmit={data => { onAddViolation(data); setShowAdd(false); }}
+            onCancel={() => setShowAdd(false)}
+          />
+        </Modal>
+      )}
+
+      {editingViolation && (
+        <Modal title={`Зөрчил засах — ${editingViolation.code}`} onClose={() => setEditingViolation(null)}>
+          <ViolationForm
+            initial={editingViolation}
+            onSubmit={data => { onUpdateViolation(editingViolation.id, data); setEditingViolation(null); }}
+            onCancel={() => setEditingViolation(null)}
+          />
+        </Modal>
       )}
     </div>
   );
